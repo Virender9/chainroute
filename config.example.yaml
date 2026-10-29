@@ -1,0 +1,89 @@
+# ==============================================================================
+# AI Gateway Configuration Specification
+# ==============================================================================
+# Environment variable interpolation is supported throughout this file:
+#   - ${ENV_VAR} expands to the system environment variable
+#   - ${ENV_VAR:-default_value} expands to the environment variable or fallback
+
+providers:
+  local:
+    name: local
+    base_url: "http://127.0.0.1:11434/v1"
+    timeout_seconds: 60
+
+  openai:
+    name: openai
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY:-}"
+    timeout_seconds: 60
+
+routes:
+  default:
+    alias: default
+    context_window: 8192
+    routing_strategy: priority
+    targets:
+      - provider_name: local
+        upstream_model: "llama3:latest"
+        priority: 1
+        input_cost_per_million: 0.0
+        output_cost_per_million: 0.0
+      - provider_name: openai
+        upstream_model: "gpt-4o-mini"
+        priority: 2
+        input_cost_per_million: 0.15
+        output_cost_per_million: 0.60
+
+  coding-fast:
+    alias: coding-fast
+    context_window: 16384
+    routing_strategy: lowest_latency
+    targets:
+      - provider_name: local
+        upstream_model: "qwen2.5-coder:7b"
+        priority: 1
+        input_cost_per_million: 0.0
+        output_cost_per_million: 0.0
+      - provider_name: openai
+        upstream_model: "gpt-4o-mini"
+        priority: 2
+        input_cost_per_million: 0.15
+        output_cost_per_million: 0.60
+
+  deepseek:
+    alias: deepseek
+    context_window: 65536
+    routing_strategy: adaptive_balanced
+    targets:
+      - provider_name: local
+        upstream_model: "deepseek-coder:6.7b"
+        priority: 1
+        input_cost_per_million: 0.0
+        output_cost_per_million: 0.0
+      - provider_name: openai
+        upstream_model: "gpt-4o"
+        priority: 2
+        input_cost_per_million: 2.50
+        output_cost_per_million: 10.00
+
+virtual_keys:
+  - id: "vk-master"
+    name: "Development Master Key"
+    key: "${GATEWAY_MASTER_KEY:-gw-dev-master-key}"
+    allowed_models: ["*"]
+    max_budget_tokens: null
+    enabled: true
+
+  - id: "vk-coding-team"
+    name: "Coding Team Key"
+    key: "${CODING_TEAM_KEY:-gw-coding-team-secret}"
+    allowed_models: ["coding-fast", "default"]
+    max_budget_tokens: 10000000
+    enabled: true
+
+  - id: "vk-deepseek-research"
+    name: "DeepSeek Research Key"
+    key: "${RESEARCH_KEY:-gw-research-team-secret}"
+    allowed_models: ["deepseek", "default"]
+    max_budget_tokens: 5000000
+    enabled: true

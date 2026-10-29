@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Gateway - Management Console</title>
+    <style>
+        :root { --bg:#0f172a; --surface:#1e293b; --surface-hover:#334155; --border:#334155; --text:#f8fafc; --text-muted:#94a3b8; --accent:#38bdf8; --success:#22c55e; --warning:#eab308; --danger:#ef4444; --info:#3b82f6; --radius:0.75rem; }
+        * { box-sizing:border-box; margin:0; padding:0; }
+        body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+        .container { max-width:1400px; margin:0 auto; padding:1.5rem; }
+        header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1.5rem; padding-bottom:1rem; border-bottom:1px solid var(--border); }
+        .logo { display:flex; align-items:center; gap:0.75rem; font-size:1.25rem; font-weight:700; color:var(--accent); }
+        .logo-icon { width:32px; height:32px; background:linear-gradient(135deg,var(--accent),var(--info)); border-radius:0.5rem; display:flex; align-items:center; justify-content:center; font-weight:bold; }
+        .status-badge { display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.8rem; background:var(--surface); border:1px solid var(--border); border-radius:2rem; font-size:0.875rem; }
+        .status-dot { width:8px; height:8px; background:var(--success); border-radius:50%; box-shadow:0 0 8px var(--success); }
+        .status-dot.down { background:var(--danger); box-shadow:0 0 8px var(--danger); }
+        .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:1rem; margin-bottom:1.5rem; }
+        .grid-3 { grid-template-columns:repeat(auto-fit,minmax(350px,1fr)); }
+        .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); box-shadow:0 10px 15px -3px rgba(0,0,0,0.3); overflow:hidden; }
+        .card-header { padding:1rem 1.25rem; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+        .card-title { font-size:0.875rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); display:flex; align-items:center; gap:0.5rem; }
+        .card-body { padding:1.25rem; }
+        .status-bar { display:flex; gap:1rem; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:1rem 1.25rem; margin-bottom:1.5rem; box-shadow:0 10px 15px -3px rgba(0,0,0,0.3); }
+        .stat-item { display:flex; flex-direction:column; gap:0.25rem; }
+        .stat-label { font-size:0.75rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.05em; }
+        .stat-value { font-size:1.5rem; font-weight:700; font-variant-numeric:tabular-nums; color:var(--text); }
+        .stat-value.highlight { color:var(--accent); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo"><div class="logo-icon">AI</div><span>Gateway Console</span></div>
+            <div class="status-badge" id="system-status"><div class="status-dot" id="status-dot"></div><span id="status-text">Online</span></div>
+        </header>
+        <div class="status-bar">
+            <div class="stat-item"><span class="stat-label">Uptime</span><span class="stat-value" id="uptime">0s</span></div>
+            <div class="stat-item"><span class="stat-label">In-Flight Streams</span><span class="stat-value highlight" id="in-flight">0</span></div>
+            <div class="stat-item"><span class="stat-label">Total Requests</span><span class="stat-value" id="total-requests">0</span></div>
+            <div class="stat-item"><span class="stat-label">Memory (RSS)</span><span class="stat-value" id="memory">0 MB</span></div>
+        <div class="grid grid-3">
+            <div class="card">
+                <div class="card-header"><div class="card-title">🔌 Providers & Circuit Breakers</div></div>
+                <div class="card-body" id="providers-container"><div class="empty">Loading providers...</div></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><div class="card-title">🛤️ Model Routes & Strategies</div></div>
+                <div class="card-body"><table class="table"><thead><tr><th>Alias</th><th>Strategy</th><th>Context Window</th><th>Fallback Chain</th></tr></thead><tbody id="routes-table-body"></tbody></table></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><div class="card-title">🔑 Virtual Keys & Budgets</div></div>
+                <div class="card-body" id="keys-container"><div class="empty">Loading keys...</div></div>
+            </div>
+        </div>
+        <div class="card" style="margin-top:1.5rem;">
+            <div class="card-header"><div class="card-title">💬 Prompt Playground</div></div>
+            <div class="card-body">
+                <div class="playground">
+                    <h3>Test Completion</h3>
+                    <div class="form-grid">
+                        <div class="form-group"><label class="form-label">Model</label><select class="form-select" id="playground-model"><option value="">Select model...</option></select></div>
+                        <div class="form-group"><label class="form-label">System Prompt</label><textarea class="form-textarea" id="playground-system" placeholder="You are a helpful assistant..."></textarea></div>
+                        <div class="form-group"><label class="form-label">User Prompt</label><textarea class="form-textarea" id="playground-user" placeholder="Hello!"></textarea></div>
+                        <div class="form-group" style="display:flex;flex-direction:column;gap:0.5rem;"><label class="form-label">Stream</label><select class="form-select" id="playground-stream"><option value="true">Enabled</option><option value="false">Disabled</option></select></div>
+                    </div>
+                    <div style="margin-top:1rem;display:flex;gap:0.75rem;"><button class="btn" id="playground-send">Send</button><button class="btn btn-secondary" id="playground-clear">Clear</button></div>
+                    <div class="output-area hidden" id="playground-output"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        const API_BASE = '';
+        let modelsCache = [];
+        async function fetchStatus() {
+            try {
+                const res = await fetch(API_BASE + '/admin/status');
+                if (!res.ok) throw new Error('Status fetch failed');
+                const data = await res.json();
+                document.getElementById('uptime').textContent = formatUptime(data.uptime_seconds);
+                document.getElementById('in-flight').textContent = data.in_flight_requests;
+                document.getElementById('total-requests').textContent = data.total_requests || 0;
+                document.getElementById('memory').textContent = data.memory_mb ? data.memory_mb + ' MB' : '0 MB';
+                renderProviders(data.providers || []);
+                renderRoutes(data.routes || []);
+                renderKeys(data.virtual_keys || []);
+                const ms = document.getElementById('playground-model');
+                const cur = ms.value;
+                ms.innerHTML = '<option value="">Select model...</option>';
+                modelsCache = (data.routes || []).map(r => r.alias);
+                modelsCache.forEach(alias => {
+                    const opt = document.createElement('option');
+                    opt.value = alias;
+                    opt.textContent = alias;
+                    if (alias === cur) opt.selected = true;
+                    ms.appendChild(opt);
+                });
+            } catch (err) {
+                console.error('Status poll error:', err);
+                document.getElementById('status-dot').className = 'status-dot down';
+                document.getElementById('status-text').textContent = 'Offline';
+            }
+        }
+        function formatUptime(s) {
+            const h = Math.floor(s / 3600);
+            const m = Math.floor((s % 3600) / 60);
+            const sec = Math.floor(s % 60);
+            return h + 'h ' + m + 'm ' + sec + 's';
+        }
+        function getCircuitState(e) {
+            if (e >= 5) return { state: 'open', label: 'Open', cls: 'cb-open' };
+            if (e >= 3) return { state: 'halfopen', label: 'HalfOpen', cls: 'cb-halfopen' };
+            return { state: 'closed', label: 'Closed', cls: 'cb-closed' };
+        }
+        function renderProviders(providers) {
+            const c = document.getElementById('providers-container');
+            if (!providers || providers.length === 0) {
+                c.innerHTML = '<div class="empty">No providers configured</div>';
+                return;
+            }
+            c.innerHTML = providers.map(p => {
+                const cb = getCircuitState(p.consecutive_errors || 0);
+                return '<div class="provider-card"><div class="provider-info"><div class="provider-name">' + escapeHtml(p.name) + '</div><div class="provider-url">' + escapeHtml(p.base_url) + '</div></div><div class="provider-metrics"><div class="metric"><span class="metric-label">EWMA</span><span class="metric-value">' + (p.ewma_latency_ms || 0).toFixed(0) + 'ms</span></div><div class="metric"><span class="metric-label">Errors</span><span class="metric-value">' + (p.consecutive_errors || 0) + '</span></div><span class="cb-pill ' + cb.cls + '"><span class="cb-dot"></span>' + cb.label + '</span></div></div>';
+            }).join('');
+        }
+        function renderRoutes(routes) {
+            const t = document.getElementById('routes-table-body');
+            if (!routes || routes.length === 0) {
+                t.innerHTML = '<tr><td colspan="4" class="empty">No routes configured</td></tr>';
+                return;
+            }
+            t.innerHTML = routes.map(r => {
+                const chain = (r.targets || []).map(t => t.provider_name + ':' + t.upstream_model).join(' → ');
+                return '<tr><td><strong>' + escapeHtml(r.alias) + '</strong></td><td><span class="strategy-badge strategy-' + (r.routing_strategy || 'Priority').toLowerCase().replace(/ /g, '-') + '">' + escapeHtml(r.routing_strategy || 'Priority') + '</span></td><td><span class="context-window">' + (r.context_window ? r.context_window.toLocaleString() : 'N/A') + ' tokens</span></td><td><span class="target-chain">' + escapeHtml(chain) + '</span></td></tr>';
+            }).join('');
+        }
+        function renderKeys(keys) {
+            const c = document.getElementById('keys-container');
+            if (!keys || keys.length === 0) {
+                c.innerHTML = '<div class="empty">No virtual keys configured</div>';
+                return;
+            }
+            c.innerHTML = keys.map(k => {
+                const used = k.used_tokens || 0;
+                const max = k.max_budget_tokens;
+                const pct = max ? Math.min(100, (used / max) * 100) : 0;
+                const danger = max && pct >= 90;
+                return '<div class="key-card"><div class="key-header"><span class="key-name">' + escapeHtml(k.name) + '</span><span class="key-id">' + escapeHtml(k.id) + '</span></div><div class="key-models">' + (k.allowed_models || []).join(', ') + '</div><div class="budget-bar"><div class="budget-fill ' + (danger ? 'danger' : '') + '" style="width:' + pct + '%"></div></div><div class="budget-label"><span>' + used.toLocaleString() + ' used</span><span>' + (max ? max.toLocaleString() : '∞') + ' max</span></div></div>';
+            }).join('');
+        }
+        const out = document.getElementById('playground-output');
+        const sendBtn = document.getElementById('playground-send');
+        const clearBtn = document.getElementById('playground-clear');
+        clearBtn.onclick = function () { out.innerHTML = ''; out.classList.add('hidden'); };
+        sendBtn.onclick = async function () {
+            const m = document.getElementById('playground-model').value;
+            const sys = document.getElementById('playground-system').value;
+            const usr = document.getElementById('playground-user').value;
+            const strm = document.getElementById('playground-stream').value === 'true';
+            if (!m || !usr) { alert('Please select a model and enter a user prompt.'); return; }
+            out.classList.remove('hidden');
+            out.innerHTML = '<div class="output-line system">▶ Sending request...</div>';
+            sendBtn.disabled = true;
+            sendBtn.textContent = 'Sending...';
+            try {
+                const body = { model: m, messages: [sys ? { role: 'system', content: sys } : null, { role: 'user', content: usr }].filter(Boolean), stream: strm, temperature: 0.7, max_tokens: 1000 };
+                if (strm) {
+                    const res = await fetch(API_BASE + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer gw-dev-master-key' }, body: JSON.stringify(body) });
+                    if (!res.ok) { const err = await res.json(); throw new Error(err.error?.message || 'HTTP ' + res.status); }
+                    const reader = res.body.getReader();
+                    const dec = new TextDecoder();
+                    let buf = '';
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        buf += dec.decode(value, { stream: true });
+                        const lines = buf.split('\n\n');
+                        buf = lines.pop() || '';
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                const payload = line.slice(6);
+                                if (payload === '[DONE]') { appendOutput('<div class="output-line system">✓ Stream complete</div>'); continue; }
+                                try { const parsed = JSON.parse(payload); const delta = parsed.choices?.[0]?.delta?.content || ''; if (delta) appendOutput('<div class="output-line chunk">' + escapeHtml(delta) + '</div>'); } catch (_) { }
+                            }
+                        }
+                    }
+                } else {
+                    const res = await fetch(API_BASE + '/v1/chat/completions', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer gw-dev-master-key' }, body: JSON.stringify(body) });
+                    if (!res.ok) { const err = await res.json(); throw new Error(err.error?.message || 'HTTP ' + res.status); }
+                    const data = await res.json();
+                    const content = data.choices?.[0]?.message?.content || JSON.stringify(data);
+                    appendOutput('<div class="output-line assistant">' + escapeHtml(content) + '</div>');
+                }
+            } catch (err) { appendOutput('<div class="output-line error">✗ ' + escapeHtml(err.message) + '</div>'); }
+            finally { sendBtn.disabled = false; sendBtn.textContent = 'Send'; }
+        };
+        function appendOutput(html) { out.insertAdjacentHTML('beforeend', html); out.scrollTop = out.scrollHeight; }
+        function escapeHtml(t) { if (!t) return t; return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
+        setInterval(fetchStatus, 2000);
+        fetchStatus();
+    </script>
+</body>
+</html>
