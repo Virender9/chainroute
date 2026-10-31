@@ -40,21 +40,14 @@ impl ProxyClient {
         upstream_model: &str,
         req: crate::api::completions::ChatCompletionRequest,
     ) -> Result<Response, reqwest::Error> {
-        // Rewrite the model to the upstream specific model name
-        let mut modified_req = req.clone();
-        modified_req.model = upstream_model.to_string();
+        let payload = crate::providers::adapter::build_upstream_payload(provider, upstream_model, &req);
 
-        let url = format!("{}/chat/completions", provider.base_url);
-        let mut request_builder = self.client
-            .post(&url)
-            .json(&modified_req)
-            .timeout(Duration::from_secs(provider.timeout_seconds));
-
-        // Attach API key if present
-        if let Some(ref key) = provider.api_key {
-            request_builder = request_builder.bearer_auth(key);
-        }
-
-        request_builder.send().await
+        self.client
+            .post(&payload.url)
+            .headers(payload.headers)
+            .json(&payload.body)
+            .timeout(Duration::from_secs(provider.timeout_seconds))
+            .send()
+            .await
     }
 }

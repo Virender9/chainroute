@@ -7,6 +7,8 @@ mod ratelimit;
 mod telemetry;
 mod security;
 mod server;
+mod providers;
+pub mod plugins;
 
 
 use std::sync::Arc;
@@ -65,6 +67,14 @@ async fn main() {
     let start_time = Instant::now();
     let adaptive_engine = Arc::new(crate::router::adaptive::AdaptiveScoreEngine::new(0.2));
     let tracker = Arc::new(crate::server::drain::InFlightTracker::new());
+    let coalescer = Arc::new(crate::router::singleflight::RequestCoalescer::new());
+    let plugins_path = config_holder.load().plugins_dir.clone().unwrap_or_else(|| "./plugins".to_string());
+    let plugin_manager = Arc::new(crate::plugins::manager::PluginManager::load_from_dir(std::path::Path::new(&plugins_path)).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "Failed to load WASM plugins from directory; starting with empty plugin pipeline");
+        crate::plugins::manager::PluginManager {
+            plugins: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        }
+    }));
     let app_state = Arc::new(crate::api::AppState {
         config: config_holder,
         config_path: Some(config_path),
@@ -75,6 +85,8 @@ async fn main() {
         tracker,
         start_time,
         adaptive_engine,
+        coalescer,
+        plugin_manager,
     });
 
     let app = Router::new()

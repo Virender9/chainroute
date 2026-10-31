@@ -1,0 +1,9 @@
+.git
+target/
+.delta/
+*.exe
+*.log
+tmp/
+server.err
+server.log
+.env

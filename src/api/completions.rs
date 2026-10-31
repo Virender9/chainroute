@@ -44,13 +44,15 @@ pub struct AppState {
     pub tracker: Arc<InFlightTracker>,
     pub start_time: Instant,
     pub adaptive_engine: Arc<AdaptiveScoreEngine>,
+    pub coalescer: Arc<crate::router::singleflight::RequestCoalescer>,
+    pub plugin_manager: Arc<crate::plugins::manager::PluginManager>,
 }
 
 /// Handler for chat completions endpoint
 pub async fn handle_chat_completions(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
-    Json(request): Json<ChatCompletionRequest>,
+    Json(mut request): Json<ChatCompletionRequest>,
 ) -> AxumResponse {
     // Track this request for graceful shutdown / in-flight draining.
     let _stream_guard = state.tracker.track();
@@ -140,6 +142,9 @@ pub async fn handle_chat_completions(
         }
     };
 
+    // Run sandboxed pre-flight WASM plugins
+    state.plugin_manager.run_preflight(&mut request).await;
+
     // Estimate tokens for rate limiting
     let estimated_tokens = estimate_request_tokens(&request.model, &request.messages, request.max_tokens);
 
@@ -158,6 +163,30 @@ pub async fn handle_chat_completions(
             [("Retry-After", rate_error.retry_after_secs.to_string())],
             Json(error_json),
         ).into_response();
+    }
+
+    // Check Cache-Control: no-cache and handle singleflight deduplication for followers
+    let no_cache = headers
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.contains("no-cache"))
+        .unwrap_or(false);
+
+    let cache_key = if !no_cache {
+        Some(crate::router::singleflight::compute_cache_key(&request))
+    } else {
+        None
+    };
+
+    if let Some(ref key) = cache_key {
+        match state.coalescer.acquire_or_join(key).await {
+            crate::router::singleflight::CoalesceStatus::Follower(rx) => {
+                return crate::router::singleflight::handle_follower(rx, request.stream, &request.model).await;
+            }
+            crate::router::singleflight::CoalesceStatus::Leader(_sender) => {
+                // Leader proceeds to upstream dispatch
+            }
+        }
     }
 
     // Try each target in order
@@ -179,8 +208,13 @@ pub async fn handle_chat_completions(
                     let elapsed = start.elapsed().as_secs_f64();
                     metrics::record_duration_seconds(&request.model, &target.provider_name, elapsed);
                     
+                    let is_anthropic = provider.provider_type == crate::config::providers::ProviderType::Anthropic;
+                    let is_gemini = provider.provider_type == crate::config::providers::ProviderType::Gemini;
                     if request.stream.unwrap_or(false) {
-                        return pipe_upstream_sse(upstream_res, _stream_guard);
+                        if let Some(ref key) = cache_key {
+                            state.coalescer.complete(key).await;
+                        }
+                        return pipe_upstream_sse(upstream_res, _stream_guard, is_anthropic, is_gemini, state.mcp_guard.clone());
                     } else {
                         let headers = upstream_res.headers().clone();
                         let body = match upstream_res.bytes().await {
@@ -193,69 +227,90 @@ pub async fn handle_chat_completions(
                             }
                         };
 
-                        if let Ok(mut json_value) = serde_json::from_slice::<Value>(&body) {
-                            // MCP Tool Call Validation
-                            if let Some(choices) = json_value.get_mut("choices").and_then(|c| c.as_array_mut()) {
-                                if let Some(first_choice) = choices.first_mut() {
-                                    if let Some(message) = first_choice.get_mut("message") {
-                                        if let Some(tool_calls_val) = message.get("tool_calls") {
-                                            if let Ok(tool_calls) = serde_json::from_value::<Vec<crate::security::mcp_guard::ToolCall>>(tool_calls_val.clone()) {
-                                                let mut validation_failed = false;
-                                                let mut violation_details = String::new();
+                        let mut json_value = match serde_json::from_slice::<Value>(&body) {
+                            Ok(v) => v,
+                            Err(_) => {
+                                return (
+                                    StatusCode::BAD_GATEWAY,
+                                    Json(serde_json::json!({"error": "Failed to parse upstream response json"})),
+                                ).into_response();
+                            }
+                        };
 
-                                                for tc in &tool_calls {
-                                                    if let Err(err) = state.mcp_guard.validate_tool_call(tc) {
-                                                        validation_failed = true;
-                                                        violation_details = err.to_string();
-                                                        let violation_type = match &err {
-                                                            crate::security::mcp_guard::McpSecurityError::SchemaViolation { .. } => "schema_violation",
-                                                            crate::security::mcp_guard::McpSecurityError::UnregisteredTool(_) => "unregistered_tool",
-                                                            crate::security::mcp_guard::McpSecurityError::JsonParseError(_) => "json_parse_error",
-                                                        };
-                                                        metrics::inc_mcp_violations_total(&tc.function.name, violation_type);
-                                                        tracing::error!(
-                                                            tool = %tc.function.name,
-                                                            error = %err,
-                                                            "MCP security violation detected: blocked tool call execution attempt."
-                                                        );
-                                                        break;
+                        if is_anthropic {
+                            json_value = crate::providers::anthropic::transform_anthropic_to_openai_response(&json_value, &request.model);
+                        } else if is_gemini {
+                            json_value = crate::providers::gemini::transform_gemini_to_openai_response(&json_value, &request.model);
+                        }
+
+                        // MCP Tool Call Validation
+                        if let Some(choices) = json_value.get_mut("choices").and_then(|c| c.as_array_mut()) {
+                            if let Some(first_choice) = choices.first_mut() {
+                                if let Some(message) = first_choice.get_mut("message") {
+                                    if let Some(tool_calls_val) = message.get("tool_calls") {
+                                        if let Ok(tool_calls) = serde_json::from_value::<Vec<crate::security::mcp_guard::ToolCall>>(tool_calls_val.clone()) {
+                                            let mut validation_failed = false;
+                                            let mut violation_details = String::new();
+
+                                            for tc in &tool_calls {
+                                                if let Err(err) = state.mcp_guard.validate_tool_call(tc) {
+                                                    validation_failed = true;
+                                                    violation_details = err.to_string();
+                                                    let violation_type = match &err {
+                                                        crate::security::mcp_guard::McpSecurityError::SchemaViolation { .. } => "schema_violation",
+                                                        crate::security::mcp_guard::McpSecurityError::UnregisteredTool(_) => "unregistered_tool",
+                                                        crate::security::mcp_guard::McpSecurityError::JsonParseError(_) => "json_parse_error",
+                                                    };
+                                                    metrics::inc_mcp_violations_total(&tc.function.name, violation_type);
+                                                    tracing::error!(
+                                                        tool = %tc.function.name,
+                                                        error = %err,
+                                                        "MCP security violation detected: blocked tool call execution attempt."
+                                                    );
+                                                    break;
+                                                }
+                                            }
+
+                                            if validation_failed {
+                                                let error_resp = serde_json::json!({
+                                                    "error": {
+                                                        "message": format!("Tool execution blocked by gateway schema validation: {}", violation_details),
+                                                        "type": "mcp_security_violation",
+                                                        "code": 400
                                                     }
-                                                }
-
-                                                if validation_failed {
-                                                    let error_resp = serde_json::json!({
-                                                        "error": {
-                                                            "message": format!("Tool execution blocked by gateway schema validation: {}", violation_details),
-                                                            "type": "mcp_security_violation",
-                                                            "code": 400
-                                                        }
-                                                    });
-                                                    return (StatusCode::BAD_REQUEST, Json(error_resp)).into_response();
-                                                }
+                                                });
+                                                return (StatusCode::BAD_REQUEST, Json(error_resp)).into_response();
                                             }
                                         }
                                     }
                                 }
                             }
-
-                            if let Some(usage) = json_value.get("usage") {
-                                let input = usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-                                let output = usage.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-                                let total = usage.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(input + output);
-
-                                if input > 0 {
-                                    metrics::inc_input_tokens_total(&request.model, input);
-                                }
-                                if output > 0 {
-                                    metrics::inc_output_tokens_total(&request.model, output);
-                                }
-                                virtual_key.used_tokens.fetch_add(total, std::sync::atomic::Ordering::Relaxed);
-                            }
                         }
 
-                        let mut response = AxumResponse::new(Body::from(body));
+                        if let Some(usage) = json_value.get("usage") {
+                            let input = usage.get("prompt_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                            let output = usage.get("completion_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+                            let total = usage.get("total_tokens").and_then(|t| t.as_u64()).unwrap_or(input + output);
+
+                            if input > 0 {
+                                metrics::inc_input_tokens_total(&request.model, input);
+                            }
+                            if output > 0 {
+                                metrics::inc_output_tokens_total(&request.model, output);
+                            }
+                            virtual_key.used_tokens.fetch_add(total, std::sync::atomic::Ordering::Relaxed);
+                        }
+
+                        // Run sandboxed post-flight WASM plugins
+                        state.plugin_manager.run_postflight(&mut json_value).await;
+
+                        let response_bytes = serde_json::to_vec(&json_value).unwrap_or_else(|_| body.to_vec());
+                        let mut response = AxumResponse::new(Body::from(response_bytes));
                         *response.status_mut() = StatusCode::OK;
                         *response.headers_mut() = headers;
+                        if let Some(ref key) = cache_key {
+                            state.coalescer.complete(key).await;
+                        }
                         return response;
                     }
                 }
@@ -266,6 +321,9 @@ pub async fn handle_chat_completions(
         }
     }
 
+    if let Some(ref key) = cache_key {
+        state.coalescer.complete(key).await;
+    }
     // All targets failed
     metrics::inc_requests_total(&request.model, "", StatusCode::BAD_GATEWAY.as_u16());
     let error_json = serde_json::json!({
@@ -368,6 +426,10 @@ routes:
             tracker: Arc::new(InFlightTracker::new()),
             start_time: Instant::now(),
             adaptive_engine: Arc::new(AdaptiveScoreEngine::new(0.2)),
+            coalescer: Arc::new(crate::router::singleflight::RequestCoalescer::new()),
+            plugin_manager: Arc::new(crate::plugins::manager::PluginManager {
+                plugins: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            }),
         });
 
         // Modify file on disk

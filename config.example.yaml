@@ -17,6 +17,22 @@ providers:
     api_key: "${OPENAI_API_KEY:-}"
     timeout_seconds: 60
 
+  anthropic:
+    name: anthropic
+    base_url: "https://api.anthropic.com/v1"
+    api_key: "${ANTHROPIC_API_KEY:-}"
+    timeout_seconds: 60
+    provider_type: anthropic
+
+  gemini:
+    name: gemini
+    base_url: "https://generativelanguage.googleapis.com/v1beta"
+    api_key: "${GEMINI_API_KEY:-}"
+    timeout_seconds: 60
+    provider_type: gemini
+
+plugins_dir: "./plugins"
+
 routes:
   default:
     alias: default

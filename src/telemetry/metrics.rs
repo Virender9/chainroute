@@ -51,3 +51,18 @@ pub fn inc_mcp_violations_total(tool: &str, violation_type: &str) {
 pub fn set_target_ewma_latency_ms(target: &str, latency_ms: f64) {
     histogram!("gen_ai_target_ewma_latency_ms", "target" => target.to_string()).record(latency_ms);
 }
+
+/// Increment the semantic coalescing counter labeled by model.
+pub fn inc_coalesced_requests_total(model: &str) {
+    counter!("gen_ai_coalesced_requests_total", "model" => model.to_string()).increment(1);
+}
+
+/// Increment the plugin execution counter labeled by plugin, hook, and status.
+pub fn inc_plugin_executions(plugin: &str, hook: &str, status: &str) {
+    counter!("gen_ai_plugin_executions_total", "plugin" => plugin.to_string(), "hook" => hook.to_string(), "status" => status.to_string()).increment(1);
+}
+
+/// Record plugin execution duration labeled by plugin and hook.
+pub fn record_plugin_duration(plugin: &str, hook: &str, elapsed: f64) {
+    histogram!("gen_ai_plugin_duration_seconds", "plugin" => plugin.to_string(), "hook" => hook.to_string()).record(elapsed);
+}

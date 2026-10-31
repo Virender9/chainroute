@@ -106,6 +106,8 @@ struct RawGatewayConfig {
     routes: Option<RoutesFormat>,
     #[serde(default)]
     virtual_keys: Vec<VirtualKeyConfig>,
+    #[serde(default)]
+    plugins_dir: Option<String>,
 }
 
 /// Parses a YAML string into a validated `GatewayConfig`.
@@ -154,6 +156,7 @@ pub fn parse_config_str(content: &str) -> Result<GatewayConfig, ConfigError> {
         providers,
         routes,
         virtual_keys: raw.virtual_keys,
+        plugins_dir: raw.plugins_dir.or_else(crate::config::providers::default_plugins_dir),
     };
 
     config.validate()?;

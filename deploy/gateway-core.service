@@ -1,0 +1,26 @@
+[Unit]
+Description=AI Gateway Core Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=gateway
+Group=gateway
+WorkingDirectory=/opt/gateway-core
+ExecStart=/opt/gateway-core/gateway-core
+Restart=always
+RestartSec=5s
+LimitNOFILE=65536
+
+# Security Sandboxing
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+CapabilityBoundingSet=
+ReadOnlyPaths=/opt/gateway-core/config.yaml
+
+[Install]
+WantedBy=multi-user.target

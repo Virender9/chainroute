@@ -38,6 +38,10 @@ mod tests {
             tracker: Arc::new(InFlightTracker::new()),
             start_time: Instant::now(),
             adaptive_engine: Arc::new(AdaptiveScoreEngine::new(0.2)),
+            coalescer: Arc::new(crate::router::singleflight::RequestCoalescer::new()),
+            plugin_manager: Arc::new(crate::plugins::manager::PluginManager {
+                plugins: Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            }),
         });
 
         let result = handle_admin_status(State(state)).await;

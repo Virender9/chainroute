@@ -13,6 +13,16 @@ pub enum RoutingStrategy {
     AdaptiveBalanced,
 }
 
+/// Protocol type for upstream provider
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderType {
+    #[default]
+    OpenAi,
+    Anthropic,
+    Gemini,
+}
+
 /// Configuration for a single provider (e.g., Ollama, OpenAI)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderConfig {
@@ -23,6 +33,8 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: u64,
+    #[serde(default)]
+    pub provider_type: ProviderType,
 }
 
 fn default_timeout() -> u64 {
@@ -36,7 +48,14 @@ impl ProviderConfig {
             base_url,
             api_key,
             timeout_seconds,
+            provider_type: ProviderType::OpenAi,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn with_provider_type(mut self, provider_type: ProviderType) -> Self {
+        self.provider_type = provider_type;
+        self
     }
 }
 
@@ -118,6 +137,10 @@ fn default_true() -> bool {
     true
 }
 
+pub fn default_plugins_dir() -> Option<String> {
+    Some("./plugins".to_string())
+}
+
 /// The overall gateway configuration containing providers, model routes, and virtual keys
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct GatewayConfig {
@@ -127,6 +150,8 @@ pub struct GatewayConfig {
     pub routes: HashMap<String, ModelRoute>,
     #[serde(default)]
     pub virtual_keys: Vec<VirtualKeyConfig>,
+    #[serde(default = "default_plugins_dir")]
+    pub plugins_dir: Option<String>,
 }
 
 impl GatewayConfig {
@@ -168,6 +193,7 @@ impl GatewayConfig {
             providers,
             routes,
             virtual_keys: Vec::new(),
+            plugins_dir: default_plugins_dir(),
         }
     }
 
